@@ -10,4 +10,6 @@ void bsp_uart_init(uint32_t baudrate);
 
 void bsp_clock_init(void);
 
+void bsp_button_init(void);
+
 #endif /* __BSP_ATK_PANDORA_H__ */

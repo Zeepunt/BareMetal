@@ -77,6 +77,42 @@ void USART1_IRQHandler(void)
     HAL_UART_IRQHandler(&s_uart1_handler);
 }
 
+void EXTI9_5_IRQHandler(void)
+{
+    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_8);
+    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_9);
+}
+
+void EXTI15_10_IRQHandler(void)
+{
+    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_10);
+    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_13);
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    switch (GPIO_Pin) {
+    case GPIO_PIN_13:
+        printf("WK-UP\r\n");
+        break;
+
+    case GPIO_PIN_8:
+        printf("KEY2\r\n");
+        break;
+
+    case GPIO_PIN_9:
+        printf("KEY1\r\n");
+        break;
+
+    case GPIO_PIN_10:
+        printf("KEY0\r\n");
+        break;
+
+    default:
+        break;
+    }
+}
+
 void bsp_uart_init(uint32_t baudrate)
 {
     __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -153,4 +189,37 @@ void bsp_clock_init(void)
     if (HAL_OK != ret) {
         while (1);
     }
+}
+
+void bsp_button_init(void)
+{
+    /**
+     * WK-UP -> PC13
+     * KEY0  -> PD10
+     * KEY1  -> PD9
+     * KEY2  -> PD8
+     */
+
+    GPIO_InitTypeDef GPIO_Initure;
+
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_GPIOD_CLK_ENABLE();
+
+    GPIO_Initure.Pin = GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10;
+    GPIO_Initure.Mode = GPIO_MODE_IT_FALLING;
+    GPIO_Initure.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(GPIOD, &GPIO_Initure);
+
+    GPIO_Initure.Pin = GPIO_PIN_13;
+    GPIO_Initure.Mode = GPIO_MODE_IT_RISING;
+    GPIO_Initure.Pull = GPIO_PULLDOWN;
+    HAL_GPIO_Init(GPIOC, &GPIO_Initure);
+
+    /* PD8 PD9 */
+    HAL_NVIC_SetPriority(EXTI9_5_IRQn, 2, 0);
+    HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+
+    /* PD10 PC13 */
+    HAL_NVIC_SetPriority(EXTI15_10_IRQn, 2, 3);
+    HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 }

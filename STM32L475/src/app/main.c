@@ -12,6 +12,7 @@ int main(void)
 
     bsp_clock_init();
     bsp_uart_init(115200);
+    bsp_button_init();
 
     printf("Hello world.\r\n");
 
