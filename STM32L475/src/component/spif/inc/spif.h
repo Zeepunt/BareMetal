@@ -27,4 +27,18 @@ typedef struct {
  */
 int spif_init(void);
 
+int spif_read(uint32_t addr, uint8_t *data, uint32_t data_size);
+
+int spif_fast_read(uint32_t addr, uint8_t *data, uint32_t data_size);
+
+int spif_block_erase_32(uint32_t addr);
+
+int spif_block_erase_64(uint32_t addr);
+
+int spif_sector_erase(uint32_t addr);
+
+int spif_page_program(uint32_t addr, uint8_t *data, uint32_t data_size);
+
+void spif_page_test(uint32_t page_addr);
+
 #endif /* __SPIF_H__ */

@@ -5,6 +5,7 @@
  * SPDX-FileCopyrightText: 2025 Zeepunt
  */
 #include <stdio.h>
+#include <string.h>
 #include "spif.h"
 #include "spif_port.h"
 
@@ -52,6 +53,9 @@
 #define SPIF_CMD_READ_STATUS_REGISTER1 0x05
 #define SPIF_CMD_READ_STATUS_REGISTER2 0x35
 #define SPIF_CMD_READ_STATUS_REGISTER3 0x15
+
+#define SPIF_CMD_READ_DATA             0x03
+#define SPIF_CMD_FAST_READ             0x0B
 
 #define SPIF_CMD_PAGE_PROGRAM          0x02
 #define SPIF_CMD_SECTOR_ERASE_4K       0x20
@@ -120,9 +124,37 @@ static int _spif_read_jedec_id(uint8_t *buf, uint32_t buf_len)
         return SPIF_FAIL;
     }
 
-    ret = s_spi_ops.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), buf, 3);
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), buf, 3);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], SPIF_SPI_INVALID_ADDR, NULL, 0, buf, 3);
+    }
+    
     if (ret != SPIF_SUCCESS) {
-        SPIF_ERROR(TAG, "spi read id failed: %d.", ret);
+        SPIF_ERROR(TAG, "spi read jedec id failed: %d.", ret);
+        return ret;
+    }
+
+    return ret;
+}
+
+static int _spif_read_status_register1(uint8_t *status)
+{
+    int ret = SPIF_SUCCESS;
+
+    uint8_t cmd[] = {SPIF_CMD_READ_STATUS_REGISTER1};
+    uint8_t buf[1] = {0};
+
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), buf, 1);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], SPIF_SPI_INVALID_ADDR, NULL, 0, buf, 1);
+    }
+
+    *status = buf[0];
+
+    if (ret != SPIF_SUCCESS) {
+        SPIF_ERROR(TAG, "spi read status_register1 failed: %d.", ret);
         return ret;
     }
 
@@ -135,7 +167,12 @@ static int _spif_write_enable(void)
 
     uint8_t cmd[] = {SPIF_CMD_WRITE_ENABLE};
 
-    ret = s_spi_ops.spi_send(cmd, SPIF_ARRAY_SIZE(cmd));
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), NULL, 0);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], SPIF_SPI_INVALID_ADDR, NULL, 0, NULL, 0);
+    }
+
     if (ret != SPIF_SUCCESS) {
         SPIF_ERROR(TAG, "spi write enable failed: %d.", ret);
         return ret;
@@ -150,7 +187,12 @@ static int _spif_write_disable(void)
 
     uint8_t cmd[] = {SPIF_CMD_WRITE_DISABLE};
 
-    ret = s_spi_ops.spi_send(cmd, SPIF_ARRAY_SIZE(cmd));
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), NULL, 0);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], SPIF_SPI_INVALID_ADDR, NULL, 0, NULL, 0);
+    }
+
     if (ret != SPIF_SUCCESS) {
         SPIF_ERROR(TAG, "spi write disable failed: %d.", ret);
         return ret;
@@ -159,31 +201,31 @@ static int _spif_write_disable(void)
     return ret;
 }
 
-static int _spif_read_status_register1(uint8_t *status)
+static int _spif_wait_idle(void)
 {
     int ret = SPIF_SUCCESS;
+    uint8_t status = 0xFF;
 
-    uint8_t cmd[] = {SPIF_CMD_READ_STATUS_REGISTER1};
-    uint8_t buf[1] = {0};
+    for (int i = 0; i < 500; i++) {
+        ret = _spif_read_status_register1(&status);
+        if (ret != SPIF_SUCCESS) {
+            return ret;
+        }
 
-    ret = s_spi_ops.spi_send(cmd, SPIF_ARRAY_SIZE(cmd));
-    if (ret != SPIF_SUCCESS) {
-        SPIF_ERROR(TAG, "spi read status1 w failed: %d.", ret);
-        return ret;
+        if ((status & SPIF_STATUS_BUSY) == 0) {
+            break;
+        }
+
+        s_plat_ops.delay_us(50);
     }
 
-    ret = s_spi_ops.spi_recv(buf, SPIF_ARRAY_SIZE(buf));
-    if (ret != SPIF_SUCCESS) {
-        SPIF_ERROR(TAG, "spi read status1 r failed: %d.", ret);
-        return ret;
-    }
+    return ret;
 }
 
 static int _spif_chip_erase(void)
 {
     int ret = SPIF_SUCCESS;
 
-    uint8_t status = 0;
     uint8_t cmd[] = {SPIF_CMD_CHIP_ERASE};
 
     ret = _spif_write_enable();
@@ -191,37 +233,23 @@ static int _spif_chip_erase(void)
         return ret;
     }
 
-    for (int i = 0; i < 500; i++) {
-        ret = _spif_read_status_register1(&status);
-        if (ret != SPIF_SUCCESS) {
-            return ret;
-        }
-
-        if ((status & SPIF_STATUS_BUSY) == 0) {
-            break;
-        }
-
-        // TODO delay some time
-    }
-
-    ret = s_spi_ops.spi_send(cmd, SPIF_ARRAY_SIZE(cmd));
+    _spif_wait_idle();
     if (ret != SPIF_SUCCESS) {
-        SPIF_ERROR(TAG, "spi write disable failed: %d.", ret);
         return ret;
     }
 
-    for (int i = 0; i < 500; i++) {
-        ret = _spif_read_status_register1(&status);
-        if (ret != SPIF_SUCCESS) {
-            return ret;
-        }
-
-        if ((status & SPIF_STATUS_BUSY) == 0) {
-            break;
-        }
-
-        // TODO delay some time
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), NULL, 0);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], SPIF_SPI_INVALID_ADDR, NULL, 0, NULL, 0);
     }
+
+    if (ret != SPIF_SUCCESS) {
+        SPIF_ERROR(TAG, "spi chip erase failed: %d.", ret);
+        return ret;
+    }
+
+    _spif_wait_idle();
 
     ret = _spif_write_disable();
     if (ret != SPIF_SUCCESS) {
@@ -231,18 +259,115 @@ static int _spif_chip_erase(void)
     return ret;
 }
 
-static int _spif_page_program(uint32_t addr, uint8_t *data, uint32_t data_size)
+int spif_block_erase_32(uint32_t addr)
 {
     int ret = SPIF_SUCCESS;
 
-    uint8_t status = 0;
+    uint8_t cmd[] = {SPIF_CMD_BLOCK_ERASE_32K, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF};
+
+    ret = _spif_write_enable();
+    if (ret != SPIF_SUCCESS) {
+        return ret;
+    }
+
+    _spif_wait_idle();
+    if (ret != SPIF_SUCCESS) {
+        return ret;
+    }
+
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), NULL, 0);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], addr, NULL, 0, NULL, 0);
+    }
+
+    _spif_wait_idle();
+
+    ret = _spif_write_disable();
+    if (ret != SPIF_SUCCESS) {
+        return ret;
+    }
+
+    return ret;
+}
+
+int spif_block_erase_64(uint32_t addr)
+{
+    int ret = SPIF_SUCCESS;
+
+    uint8_t cmd[] = {SPIF_CMD_BLOCK_ERASE_64K, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF};
+
+    ret = _spif_write_enable();
+    if (ret != SPIF_SUCCESS) {
+        return ret;
+    }
+
+    _spif_wait_idle();
+    if (ret != SPIF_SUCCESS) {
+        return ret;
+    }
+
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), NULL, 0);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], addr, NULL, 0, NULL, 0);
+    }
+
+    _spif_wait_idle();
+
+    ret = _spif_write_disable();
+    if (ret != SPIF_SUCCESS) {
+        return ret;
+    }
+
+    return ret;
+}
+
+int spif_sector_erase(uint32_t addr)
+{
+    int ret = SPIF_SUCCESS;
+
+    uint8_t cmd[] = {SPIF_CMD_SECTOR_ERASE_4K, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF};
+
+    ret = _spif_write_enable();
+    if (ret != SPIF_SUCCESS) {
+        return ret;
+    }
+
+    _spif_wait_idle();
+    if (ret != SPIF_SUCCESS) {
+        return ret;
+    }
+
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), NULL, 0);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], addr, NULL, 0, NULL, 0);
+    }
+
+    _spif_wait_idle();
+
+    ret = _spif_write_disable();
+    if (ret != SPIF_SUCCESS) {
+        return ret;
+    }
+
+    return ret;
+}
+
+int spif_page_program(uint32_t addr, uint8_t *data, uint32_t data_size)
+{
+    int ret = SPIF_SUCCESS;
+
     uint8_t cmd[] = {SPIF_CMD_PAGE_PROGRAM, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF};
 
     if (data_size > s_spif_flash_info[s_spif_flash_index].page_size) {
+        SPIF_ERROR(TAG, "invalid data size.");
         return SPIF_FAIL;
     }
 
     if (((addr & 0xFF) + data_size) > s_spif_flash_info[s_spif_flash_index].page_size) {
+        SPIF_ERROR(TAG, "page program out of range.");
         return SPIF_FAIL;
     }
 
@@ -251,34 +376,54 @@ static int _spif_page_program(uint32_t addr, uint8_t *data, uint32_t data_size)
         return ret;
     }
 
-    ret = s_spi_ops.spi_send(cmd, SPIF_ARRAY_SIZE(cmd));
+    ret = _spif_wait_idle();
     if (ret != SPIF_SUCCESS) {
-        SPIF_ERROR(TAG, "spi page program w failed: %d.", ret);
         return ret;
     }
 
-    ret = s_spi_ops.spi_send(data, data_size);
-    if (ret != SPIF_SUCCESS) {
-        SPIF_ERROR(TAG, "spi page program w failed: %d.", ret);
-        return ret;
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), NULL, 0);
+        
+        ret = s_spi_ops.ops.spi.spi_send(data, data_size);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], addr, data, data_size, NULL, 0);
     }
 
-    for (int i = 0; i < 500; i++) {
-        ret = _spif_read_status_register1(&status);
-        if (ret != SPIF_SUCCESS) {
-            return ret;
-        }
-
-        if ((status & SPIF_STATUS_BUSY) == 0) {
-            break;
-        }
-
-        // TODO delay some time
-    }
+    ret = _spif_wait_idle();
 
     ret = _spif_write_disable();
     if (ret != SPIF_SUCCESS) {
         return ret;
+    }
+
+    return ret;
+}
+
+int spif_read(uint32_t addr, uint8_t *data, uint32_t data_size)
+{
+    int ret = SPIF_SUCCESS;
+
+    uint8_t cmd[] = {SPIF_CMD_READ_DATA, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF};
+
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), data, data_size);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], addr, NULL, 0, data, data_size);
+    }
+
+    return ret;
+}
+
+int spif_fast_read(uint32_t addr, uint8_t *data, uint32_t data_size)
+{
+    int ret = SPIF_SUCCESS;
+
+    uint8_t cmd[] = {SPIF_CMD_FAST_READ, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF};
+
+    if (s_spi_ops.ops_mode == SPIF_SPI_OPS_SPI) {
+        ret = s_spi_ops.ops.spi.spi_transfer(cmd, SPIF_ARRAY_SIZE(cmd), data, data_size);
+    } else if (s_spi_ops.ops_mode == SPIF_SPI_OPS_QSPI) {
+        ret = s_spi_ops.ops.qspi.qspi_transfer(cmd[0], addr, NULL, 0, data, data_size);
     }
 
     return ret;
@@ -317,5 +462,124 @@ int spif_init(void)
     SPIF_DEBUG(TAG, "Memory Type  : 0x%x.", buf[1]);
     SPIF_DEBUG(TAG, "Capacity     : 0x%x.", buf[2]);
 
+    for (uint16_t i = 0; i < SPIF_ARRAY_SIZE(s_spif_flash_info); i++) {
+        if ((buf[0] == s_spif_flash_info[i].mf_id) &&
+            (buf[1] == s_spif_flash_info[i].mt_id) &&
+            (buf[2] == s_spif_flash_info[i].cap_id)) {
+            SPIF_INFO(TAG, "Flash: %s, Size: %d KB, Block: %d KB, Sector: %d KB, Page: %d B.",
+                      s_spif_flash_info[i].name,
+                      s_spif_flash_info[i].chip_size / 1024,
+                      s_spif_flash_info[i].block_size / 1024,
+                      s_spif_flash_info[i].sector_size / 1024,
+                      s_spif_flash_info[i].page_size);
+            s_spif_flash_index = i;
+            break;
+        }
+    }
+
     return ret;
+}
+
+void spif_page_test(uint32_t page_addr)
+{
+    int ret = SPIF_SUCCESS;
+
+    uint8_t page_tx_buf[256] = {0};
+    uint8_t page_rx_buf[256] = {0};
+
+    uint32_t sector_addr = page_addr & (~0xFFF); /* 4K sector */
+    uint32_t block_addr = page_addr & (~0x7FFF); /* 32K block */
+
+    SPIF_DEBUG(TAG, "Page Test 1: page: 0x%04X, sector: 0x%04X, block: 0x%04X\r\n", page_addr, sector_addr, block_addr);
+
+    /* Test 1: normal page program */
+    SPIF_DEBUG(TAG, "Test 1: normal page program\r\n");
+
+    memset(page_tx_buf, 0x11, 256);
+    SPIF_DEBUG(TAG, "page program data: 0x%2X", page_tx_buf[0]);
+    ret = spif_page_program(page_addr, page_tx_buf, 256);
+    if (ret != SPIF_SUCCESS) {
+        SPIF_ERROR(TAG, "page program failed: %d.", ret);
+        return;
+    }
+
+    memset(page_rx_buf, 0x00, 256);
+    ret = spif_read(page_addr, page_rx_buf, 256);
+    if (ret != SPIF_SUCCESS) {
+        SPIF_ERROR(TAG, "page read failed: %d.", ret);
+        return;
+    }
+
+    SPIF_DEBUG(TAG, "page[  0:3  ] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[0], page_rx_buf[1], page_rx_buf[2], page_rx_buf[3]);
+    SPIF_DEBUG(TAG, "page[252:255] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[252], page_rx_buf[253], page_rx_buf[254], page_rx_buf[255]);
+
+    /* Test 2: sector erase */
+    SPIF_DEBUG(TAG, "Test 2: sector erase\r\n");
+
+    spif_sector_erase(sector_addr);
+    memset(page_rx_buf, 0x00, 256);
+    spif_read(page_addr, page_rx_buf, 256);
+
+    SPIF_DEBUG(TAG, "page[  0:3  ] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[0], page_rx_buf[1], page_rx_buf[2], page_rx_buf[3]);
+    SPIF_DEBUG(TAG, "page[252:255] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[252], page_rx_buf[253], page_rx_buf[254], page_rx_buf[255]);
+
+    /* Test 3: page program overrun 1 */
+    SPIF_DEBUG(TAG, "Test 3: page program overrun 1\r\n");
+
+    memset(page_tx_buf, 0x22, 18); /* 18 = 0x12 */
+    SPIF_DEBUG(TAG, "page program data: 0x%2X", page_tx_buf[0]);
+    spif_page_program(page_addr, page_tx_buf, 18);
+
+    memset(page_rx_buf, 0x00, 18);
+    spif_read(page_addr, page_rx_buf, 18);
+
+    SPIF_DEBUG(TAG, "page[  0:3  ] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[0], page_rx_buf[1], page_rx_buf[2], page_rx_buf[3]);
+    SPIF_DEBUG(TAG, "page[ 16:19 ] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[16], page_rx_buf[17], page_rx_buf[18], page_rx_buf[19]);
+    SPIF_DEBUG(TAG, "page[252:255] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[252], page_rx_buf[253], page_rx_buf[254], page_rx_buf[255]);
+
+    memset(page_tx_buf, 0x11, 256); /* 18 = 0x12 */
+    SPIF_DEBUG(TAG, "page program data: 0x%2X", page_tx_buf[0]);
+    spif_page_program(page_addr + 0x12, page_tx_buf, 256);
+
+    memset(page_rx_buf, 0x00, 256);
+    spif_read(page_addr, page_rx_buf, 256);
+
+    SPIF_DEBUG(TAG, "page[  0:3  ] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[0], page_rx_buf[1], page_rx_buf[2], page_rx_buf[3]);
+    SPIF_DEBUG(TAG, "page[ 16:19 ] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[16], page_rx_buf[17], page_rx_buf[18], page_rx_buf[19]);
+    SPIF_DEBUG(TAG, "page[252:255] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[252], page_rx_buf[253], page_rx_buf[254], page_rx_buf[255]);
+
+    /* Test 4: page program overrun 2 */
+    SPIF_DEBUG(TAG, "Test 4: page program overrun 2\r\n");
+
+    spif_sector_erase(sector_addr);
+
+    memset(page_tx_buf, 0x11, 256);
+    SPIF_DEBUG(TAG, "page program data: 0x%2X", page_tx_buf[0]);
+    spif_page_program(page_addr, page_tx_buf, 256);
+
+    memset(page_rx_buf, 0x00, 256);
+    spif_read(page_addr, page_rx_buf, 256);
+
+    SPIF_DEBUG(TAG, "page[  0:3  ] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[0], page_rx_buf[1], page_rx_buf[2], page_rx_buf[3]);
+    SPIF_DEBUG(TAG, "page[252:255] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[252], page_rx_buf[253], page_rx_buf[254], page_rx_buf[255]);
+
+    memset(page_tx_buf, 0x22, 256);
+    SPIF_DEBUG(TAG, "page program data: 0x%2X", page_tx_buf[0]);
+    spif_page_program(page_addr, page_tx_buf, 256);
+
+    memset(page_rx_buf, 0x00, 256);
+    spif_read(page_addr, page_rx_buf, 256);
+
+    SPIF_DEBUG(TAG, "page[  0:3  ] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[0], page_rx_buf[1], page_rx_buf[2], page_rx_buf[3]);
+    SPIF_DEBUG(TAG, "page[252:255] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[252], page_rx_buf[253], page_rx_buf[254], page_rx_buf[255]);
+
+    /* Test 5: block erase */
+    SPIF_DEBUG(TAG, "Test 5: block erase\r\n");
+
+    spif_block_erase_32(block_addr);
+    memset(page_rx_buf, 0x00, 256);
+    spif_read(page_addr, page_rx_buf, 256);
+
+    SPIF_DEBUG(TAG, "page[  0:3  ] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[0], page_rx_buf[1], page_rx_buf[2], page_rx_buf[3]);
+    SPIF_DEBUG(TAG, "page[252:255] 0x%02X 0x%02X 0x%02X 0x%02X", page_rx_buf[252], page_rx_buf[253], page_rx_buf[254], page_rx_buf[255]);
 }

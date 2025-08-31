@@ -9,20 +9,36 @@
 
 #include <stdint.h>
 
+#define SPIF_SPI_OPS_SPI      0
+#define SPIF_SPI_OPS_QSPI     1
+
+#define SPIF_SPI_INVALID_ADDR (0xFFFFFFFF)
+
 typedef struct spif_port_spi_operations_s {
+    uint8_t ops_mode;
+
     void (*spi_lock)(uint32_t ms);
     void (*spi_unlock)(void);
 
     int (*spi_init)(void);
     int (*spi_deinit)(void);
 
-    int (*spi_send)(const uint8_t *send_buf, uint32_t send_size);
-    int (*spi_recv)(uint8_t *recv_buf, uint32_t recv_size);
-    int (*spi_transfer)(const uint8_t *send_buf, uint32_t send_size, uint8_t *recv_buf, uint32_t recv_size);
+    union {
+        struct {
+            int (*spi_send)(const uint8_t *tx_buf, uint32_t tx_size);
+            int (*spi_recv)(uint8_t *rx_buf, uint32_t rx_size);
+            int (*spi_transfer)(const uint8_t *tx_buf, uint32_t tx_size, uint8_t *rx_buf, uint32_t rx_size);
+        } spi;
+
+        struct {
+            int (*qspi_transfer)(uint8_t cmd, uint32_t addr, const uint8_t *tx_buf, uint32_t tx_size, uint8_t *rx_buf, uint32_t rx_size);
+        } qspi;
+    } ops;
 } spif_port_spi_ops_t;
 
 typedef struct spif_port_platform_operations_s {
     int (*log)(const char *format, ...);
+    void (*delay_us)(uint32_t us);
     void (*delay_ms)(uint32_t ms);
 } spif_port_plat_ops_t;
 
