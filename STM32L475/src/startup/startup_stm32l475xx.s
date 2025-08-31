@@ -181,26 +181,63 @@ NMI_Handler     PROC
                 EXPORT  NMI_Handler                [WEAK]
                 B       .
                 ENDP
+
 HardFault_Handler\
                 PROC
-                EXPORT  HardFault_Handler          [WEAK]
+                push {r0, r1, r2, r3}
+
+                mov r0, pc
+                sub r0, r0, #4
+                mov r1, lr
+                mov r2, sp
+
+                IMPORT cust_expection_handler
+                bl cust_expection_handler
                 B       .
                 ENDP
+
 MemManage_Handler\
                 PROC
-                EXPORT  MemManage_Handler          [WEAK]
+                push {r0, r1, r2, r3}
+
+                mov r0, pc
+                sub r0, r0, #4
+                mov r1, lr
+                mov r2, sp
+
+                IMPORT cust_expection_handler
+                bl cust_expection_handler
                 B       .
                 ENDP
+
 BusFault_Handler\
                 PROC
-                EXPORT  BusFault_Handler           [WEAK]
+                push {r0, r1, r2, r3}
+
+                mov r0, pc
+                sub r0, r0, #4
+                mov r1, lr
+                mov r2, sp
+
+                IMPORT cust_expection_handler
+                bl cust_expection_handler
                 B       .
                 ENDP
+
 UsageFault_Handler\
                 PROC
-                EXPORT  UsageFault_Handler         [WEAK]
+                push {r0, r1, r2, r3}
+
+                mov r0, pc
+                sub r0, r0, #4
+                mov r1, lr
+                mov r2, sp
+
+                IMPORT cust_expection_handler
+                bl cust_expection_handler
                 B       .
                 ENDP
+
 SVC_Handler     PROC
                 EXPORT  SVC_Handler                [WEAK]
                 B       .

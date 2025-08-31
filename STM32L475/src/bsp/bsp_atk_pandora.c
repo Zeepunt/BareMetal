@@ -1,5 +1,8 @@
 /*
- * Copyright (c) 2025 by Zeepunt, All Rights Reserved. 
+ * bsp_atk_pandora.c
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2025 Zeepunt
  */
 #include <stdio.h>
 
@@ -8,10 +11,6 @@
 
 #include "bsp_atk_pandora.h"
 
-#define UART_RX_BUF_LEN 256
-
-static uint8_t s_uart_rx_buf[UART_RX_BUF_LEN];
-static uint16_t s_uart_rx_status = 0;
 static UART_HandleTypeDef s_uart1_handler;
 
 #if !defined(__MICROLIB)
@@ -40,40 +39,27 @@ FILE __stdout;
 #endif 
 PUTCHAR_PROTOTYPE
 {
-    while((USART1->ISR & 0X40) == 0);
-
-    USART1->TDR = (uint8_t) ch;
+    HAL_UART_Transmit(&s_uart1_handler, (uint8_t *)&ch, 1, 5000);
     return ch;
+}
+
+static void _bsp_delay_ticks(uint32_t ticks)
+{
+    if (ticks == 0) {
+        return;
+    }
+
+    __asm__ volatile (
+        "delay_loop: subs %0, %0, #1\n\t"
+        "            bne delay_loop\n\t"
+        : "+r" (ticks)
+        :
+        : "cc"
+    );
 }
 
 void USART1_IRQHandler(void)
 {
-    uint8_t recv;
-
-    if ((__HAL_UART_GET_FLAG(&s_uart1_handler, UART_FLAG_RXNE) != RESET)) {
-        HAL_UART_Receive(&s_uart1_handler, &recv, 1, 1000);
-
-        if ((s_uart_rx_status & 0x8000) == 0) {
-            if (s_uart_rx_status & 0x4000) {
-                if (0x0a != recv) {
-                    s_uart_rx_status = 0;
-                } else {
-                    s_uart_rx_status |= 0x8000;
-                }
-            } else {
-                if (0x0d == recv) {
-                    s_uart_rx_status |= 0x4000;
-                } else {
-                    s_uart_rx_buf[s_uart_rx_status & 0X3FFF] = recv;
-                    s_uart_rx_status++;
-
-                    if (s_uart_rx_status > (UART_RX_BUF_LEN - 1)) {
-                        s_uart_rx_status = 0;
-                    }
-                }
-            }
-        }
-    }
     HAL_UART_IRQHandler(&s_uart1_handler);
 }
 
@@ -115,6 +101,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 void bsp_uart_init(uint32_t baudrate)
 {
+    /**
+     * UART1_TX -> PA9
+     * UART1_RX -> PA10
+     */
+
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_USART1_CLK_ENABLE();
 
@@ -135,11 +126,10 @@ void bsp_uart_init(uint32_t baudrate)
     s_uart1_handler.Init.WordLength = UART_WORDLENGTH_8B;
     s_uart1_handler.Init.StopBits = UART_STOPBITS_1;
     s_uart1_handler.Init.Parity = UART_PARITY_NONE;
-    s_uart1_handler.Init.HwFlowCtl = UART_HWCONTROL_NONE;
     s_uart1_handler.Init.Mode = UART_MODE_TX_RX;
+    s_uart1_handler.Init.HwFlowCtl = UART_HWCONTROL_NONE;
     HAL_UART_Init(&s_uart1_handler);
 
-    __HAL_UART_ENABLE_IT(&s_uart1_handler, UART_IT_RXNE);
     HAL_NVIC_EnableIRQ(USART1_IRQn);
     HAL_NVIC_SetPriority(USART1_IRQn, 3, 3);
 }
@@ -222,4 +212,19 @@ void bsp_button_init(void)
     /* PD10 PC13 */
     HAL_NVIC_SetPriority(EXTI15_10_IRQn, 2, 3);
     HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+}
+
+void SysTick_Handler(void)
+{
+    HAL_IncTick();
+}
+
+void bsp_systick_init(void)
+{
+    HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
+}
+
+void bsp_delay_us(uint32_t us)
+{
+    _bsp_delay_ticks(100 * us);
 }
